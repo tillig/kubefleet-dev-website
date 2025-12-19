@@ -17,6 +17,7 @@ Kubefleet provides two staged update approaches:
 ## Prerequisite
 
 This tutorial is based on a demo fleet environment with 3 member clusters:
+
 | cluster name | labels                      |
 |--------------|-----------------------------|
 | member1      | environment=canary, order=2 |
@@ -30,12 +31,14 @@ We'll demonstrate both cluster-scoped and namespace-scoped staged updates using 
 ### Setup for Cluster-Scoped Updates
 
 To demonstrate cluster-scoped rollout and rollback behavior, we create a demo namespace and a sample configmap with very simple data on the hub cluster. The namespace with configmap will be deployed to the member clusters.
+
 ```bash
 kubectl create ns test-namespace
 kubectl create cm test-cm --from-literal=key=value1 -n test-namespace
 ```
 
 Now we create a `ClusterResourcePlacement` to deploy the resources:
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
@@ -54,6 +57,7 @@ spec:
     type: External
 EOF
 ```
+
 **Note that `spec.strategy.type` is set to `External` to allow rollout triggered with a ClusterStagedUpdateRun.**
 All clusters should be scheduled since we use the `PickAll` policy but at the moment no resource should be deployed on the member clusters because we haven't created a `ClusterStagedUpdateRun` yet. The CRP is not **AVAILABLE** yet.
 
@@ -68,14 +72,17 @@ example-placement   1     True        1                                         
 Fleet keeps a list of resource snapshots for version control and audit, (for more details, please refer to [api-reference](docs/api-reference)).
 
 To check current resource snapshots:
+
 ```bash
 kubectl get clusterresourcesnapshots --show-labels
 NAME                           GEN   AGE     LABELS
 example-placement-0-snapshot   1     7m31s   kubernetes-fleet.io/is-latest-snapshot=true,kubernetes-fleet.io/parent-CRP=example-placement,kubernetes-fleet.io/resource-index=0
 ```
+
 We only have one version of the snapshot. It is the current latest (`kubernetes-fleet.io/is-latest-snapshot=true`) and has resource-index 0 (`kubernetes-fleet.io/resource-index=0`).
 
 Now we modify the our configmap with a new value `value2`:
+
 ```bash
 kubectl edit cm test-cm -n test-namespace
 
@@ -93,6 +100,7 @@ metadata:
 ```
 
 It now shows 2 versions of resource snapshots with index 0 and 1 respectively:
+
 ```bash
 kubectl get clusterresourcesnapshots --show-labels
 NAME                           GEN   AGE    LABELS
@@ -101,6 +109,7 @@ example-placement-1-snapshot   1     2m2s   kubernetes-fleet.io/is-latest-snapsh
 ```
 
 The `latest` label set to `example-placement-1-snapshot` which contains the latest configmap data:
+
 ```bash
 kubectl get clusterresourcesnapshots example-placement-1-snapshot -o yaml
 apiVersion: placement.kubernetes-fleet.io/v1
@@ -137,6 +146,7 @@ spec:
 
 A `ClusterStagedUpdateStrategy` defines the orchestration pattern that groups clusters into stages and specifies the rollout sequence.
 It selects member clusters by labels. For our demonstration, we create one with two stages:
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
@@ -165,6 +175,7 @@ EOF
 ### Deploy a ClusterStagedUpdateRun to rollout latest change
 
 A `ClusterStagedUpdateRun` executes the rollout of a `ClusterResourcePlacement` following a `ClusterStagedUpdateStrategy`. To trigger the staged update run for our CRP, we create a `ClusterStagedUpdateRun` specifying the CRP name, updateRun strategy name, and the latest resource snapshot index ("1"):
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
@@ -179,6 +190,7 @@ EOF
 ```
 
 The staged update run is initialized and running:
+
 ```bash
 kubectl get csur example-run
 NAME          PLACEMENT           RESOURCE-SNAPSHOT   POLICY-SNAPSHOT   INITIALIZED   SUCCEEDED   AGE
@@ -186,6 +198,7 @@ example-run   example-placement   1                   0                 True    
 ```
 
 A more detailed look at the status:
+
 ```yaml
 apiVersion: placement.kubernetes-fleet.io/v1beta1
 kind: ClusterStagedUpdateRun
@@ -309,19 +322,25 @@ status:
     stageName: canary
     startTime: ...
 ```
+
 Wait a little bit more, and we can see stage `canary` finishes cluster update and is waiting for the Approval task.
 We can check the `ClusterApprovalRequest` generated and not approved yet:
+
 ```bash
 kubectl get clusterapprovalrequest
 NAME                 UPDATE-RUN    STAGE    APPROVED   APPROVALACCEPTED   AGE
 example-run-canary   example-run   canary                                 2m2s
 ```
+
 We can approve the `ClusterApprovalRequest` by patching its status:
+
 ```bash
 kubectl patch clusterapprovalrequests example-run-canary --type=merge -p {"status":{"conditions":[{"type":"Approved","status":"True","reason":"lgtm","message":"lgtm","lastTransitionTime":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","observedGeneration":1}]}} --subresource=status
 clusterapprovalrequest.placement.kubernetes-fleet.io/example-run-canary patched
 ```
+
 This can be done equivalently by creating a json patch file and applying it:
+
 ```bash
 cat << EOF > approval.json
 "status": {
@@ -341,24 +360,31 @@ kubectl patch clusterapprovalrequests example-run-canary --type='merge' --subres
 ```
 
 Then verify it's approved:
+
 ```bash
 kubectl get clusterapprovalrequest
 NAME                 UPDATE-RUN    STAGE    APPROVED   APPROVALACCEPTED   AGE
 example-run-canary   example-run   canary   True       True               2m30s
 ```
+
 The updateRun now is able to proceed and complete:
+
 ```bash
 kubectl get csur example-run
 NAME          PLACEMENT           RESOURCE-SNAPSHOT   POLICY-SNAPSHOT   INITIALIZED   SUCCEEDED   AGE
 example-run   example-placement   1                   0                 True          True        4m22s
 ```
+
 The CRP also shows rollout has completed and resources are available on all member clusters:
+
 ```bash
 kubectl get crp example-placement
 NAME                GEN   SCHEDULED   SCHEDULED-GEN   AVAILABLE   AVAILABLE-GEN   AGE
 example-placement   1     True        1               True        1               134m
 ```
+
 The configmap `test-cm` should be deployed on all 3 member clusters, with latest data:
+
 ```yaml
 data:
   key: value2
@@ -368,6 +394,7 @@ data:
 
 Now suppose the workload admin wants to rollback the configmap change, reverting the value `value2` back to `value1`.
 Instead of manually updating the configmap from hub, they can create a new `ClusterStagedUpdateRun` with a previous resource snapshot index, "0" in our context and they can reuse the same strategy:
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
@@ -382,6 +409,7 @@ EOF
 ```
 
 Following the same step as [deploying the first updateRun](#deploy-a-clusterstagedupdaterun-to-rollout-latest-change), the second updateRun should succeed also. Complete status shown as below:
+
 ```yaml
 apiVersion: placement.kubernetes-fleet.io/v1beta1
 kind: ClusterStagedUpdateRun
@@ -410,7 +438,7 @@ status:
   - lastTransitionTime: ...
     message: ""
     observedGeneration: 1
-    reason: UpdateRunSucceeded # updateRun succeeded 
+    reason: UpdateRunSucceeded # updateRun succeeded
     status: "True"
     type: Succeeded
   deletionStageStatus:
@@ -552,7 +580,9 @@ status:
     stageName: canary
     startTime: ...
 ```
+
 The configmap `test-cm` should be updated on all 3 member clusters, with old data:
+
 ```yaml
 data:
   key: value1
@@ -573,6 +603,7 @@ kubectl expose deployment web-app --port=80 --target-port=80 -n my-app-namespace
 ```
 
 Create a namespace-scoped `ResourcePlacement` to deploy the application:
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
@@ -600,21 +631,24 @@ EOF
 ### Check namespace-scoped resource snapshots
 
 Check the resource snapshots for the namespace-scoped placement:
+
 ```bash
-kubectl get resourcesnapshots -n my-app-namespace 
-NAME                         GEN    AGE    LABELS  
+kubectl get resourcesnapshots -n my-app-namespace
+NAME                         GEN    AGE    LABELS
 web-app-placement-0-snapshot  1     63s    kubernetes-fleet.io/is-latest-snapshot=true,kubernetes-fleet.io/parent-CRP=web-app-placement,kubernetes-fleet.io/resource-index=0
 ```
 
 Update the deployment to a new version:
+
 ```bash
 kubectl set image deployment/web-app web-app=nginx:1.21 -n my-app-namespace
 ```
 
 Verify the new snapshot is created:
+
 ```bash
 kubectl get resourcesnapshots -n my-app-namespace --show-labels
-NAME                         GEN    AGE    LABELS  
+NAME                         GEN    AGE    LABELS
 web-app-placement-0-snapshot  1     263s   kubernetes-fleet.io/is-latest-snapshot=false,kubernetes-fleet.io/parent-CRP=web-app-placement,kubernetes-fleet.io/resource-index=0
 web-app-placement-1-snapshot  1     23s    kubernetes-fleet.io/is-latest-snapshot=true,kubernetes-fleet.io/parent-CRP=web-app-placement,kubernetes-fleet.io/resource-index=1
 ```
@@ -622,6 +656,7 @@ web-app-placement-1-snapshot  1     23s    kubernetes-fleet.io/is-latest-snapsho
 ### Deploy a StagedUpdateStrategy
 
 Create a namespace-scoped staged update strategy:
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
@@ -651,6 +686,7 @@ EOF
 ### Deploy a StagedUpdateRun
 
 Create a namespace-scoped staged update run to rollout the new image version:
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
@@ -668,16 +704,19 @@ EOF
 ### Monitor namespace-scoped staged rollout
 
 Check the status of the staged update run:
+
 ```bash
 kubectl describe sur web-app-rollout-v1-21 -n my-app-namespace
 ```
 
 Wait for the first stage to complete, then check for approval requests:
+
 ```bash
 kubectl get approvalrequests -n my-app-namespace
 ```
 
 Approve the staging gate to proceed to production clusters:
+
 ```bash
 kubectl patch approvalrequests web-app-rollout-v1-21-prod-clusters -n my-app-namespace --type='merge' \
   -p '{"status":{"conditions":[{"type":"Approved","status":"True","reason":"approved","message":"approved"}]}}' \
@@ -685,6 +724,7 @@ kubectl patch approvalrequests web-app-rollout-v1-21-prod-clusters -n my-app-nam
 ```
 
 Verify the rollout completion:
+
 ```bash
 kubectl get sur web-app-rollout-v1-21 -n my-app-namespace
 kubectl get resourceplacement web-app-placement -n my-app-namespace
@@ -693,6 +733,7 @@ kubectl get resourceplacement web-app-placement -n my-app-namespace
 ### Rollback with namespace-scoped staged updates
 
 To rollback to the previous version (nginx:1.20), create another staged update run referencing the earlier snapshot:
+
 ```bash
 kubectl apply -f - << EOF
 apiVersion: placement.kubernetes-fleet.io/v1beta1
